@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.sst/
+.open-next/
+.aws-sam/
+.env.local
+playwright-report/
+test-results/
+*.tsbuildinfo
+.DS_Store

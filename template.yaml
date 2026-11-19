@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Metadata-Driven Form Builder API and submission storage
+
+Parameters:
+  BudgetEmail:
+    Type: String
+    Description: Email address that receives the AWS billing alarm/budget notification
+    AllowedPattern: ".+@.+\\..+"
+  MonthlyBudgetLimit:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: Monthly AWS budget limit in USD
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures:
+      - arm64
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  FormsApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - Content-Type
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  SubmissionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-submissions"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  GetFormFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws/lambda
+      Handler: src/handler.getForm
+      Environment:
+        Variables:
+          SUBMISSIONS_TABLE: !Ref SubmissionsTable
+      Events:
+        GetForm:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FormsApi
+            Path: /forms/{id}
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - src/handler.ts
+
+  SubmitFormFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws/lambda
+      Handler: src/handler.submitForm
+      Environment:
+        Variables:
+          SUBMISSIONS_TABLE: !Ref SubmissionsTable
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref SubmissionsTable
+      Events:
+        SubmitForm:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FormsApi
+            Path: /forms/{id}/submissions
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - src/handler.ts
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub "${AWS::StackName}-monthly-budget"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetLimit
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+
+Outputs:
+  ApiUrl:
+    Description: HTTP API base URL
+    Value: !Sub "https://${FormsApi}.execute-api.${AWS::Region}.amazonaws.com"
+  SubmissionsTableName:
+    Value: !Ref SubmissionsTable
